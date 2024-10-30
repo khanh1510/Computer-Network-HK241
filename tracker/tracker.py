@@ -12,8 +12,9 @@ from collections import Counter
 list_peer_active = []
 list_file_tracker_have = []
 # Establish a connection to the PostgreSQL database
-# conn = psycopg2.connect(dbname="", user="postgres", password="1903", host="", port="5432")
-# cur = conn.cursor()
+def connect_db():
+    return psycopg2.connect(dbname="postgres", user="postgres", password="1903", host="localhost", port="5432")
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -27,6 +28,47 @@ def update_client_info(peer_ID, peer_ip,peer_port,file_name,file_size,piece_hash
                                                 'peer_port': peer_port, 'file_name': file_name, 'file_size': file_size,
                                                  'piece_hash': piece_hash[i], 'piece_size': piece_size, 'num_order_in_file': num_order_in_file[i]})
 
+
+# Đăng ký người dùng mới
+def signup(sock, username, hash_password, id_x):
+    conn = connect_db()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute(
+            'INSERT INTO "user" (id, username, password) VALUES (%s, %s, %s)',
+            (id_x, username, hash_password)
+        )
+        conn.commit()
+        sock.sendall("success".encode())
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        sock.sendall("fail".encode())
+    finally:
+        cursor.close()
+        conn.close()
+
+# Đăng nhập người dùng
+def login(sock, username, hash_password):
+    conn = connect_db()
+    cursor = conn.cursor()
+
+    
+    cursor.execute(
+        'SELECT * FROM "user" WHERE username = %s AND password = %s',
+        (username, hash_password)
+    )
+    user = cursor.fetchone()
+    
+    cursor.close()
+    conn.close()
+    
+    if user:
+        sock.sendall("success".encode())
+        return True
+    else:
+        sock.sendall("fail".encode())
+        return False
 
 #code nay chi de test
 def client_call(conn, addr):
@@ -43,16 +85,23 @@ def client_call(conn, addr):
             peer_ip = addr[0]
             peer_port = addr[1]
             peer_ID = command['peer_ID'] if 'peer_ID' in command else ""
+            user_name = command['user_name'] if 'user_name' in command else ""
+            hash_password = command['hash_password'] if 'hash_password' in command else ""
             file_name = command['file_name'] if 'file_name' in command else ""
             file_size = command['file_size'] if 'file_size' in command else ""
             piece_hash = command['piece_hash'] if 'piece_hash' in command else ""
             piece_size = command['piece_size'] if 'piece_size' in command else ""
             num_order_in_file = command['num_order_in_file'] if 'num_order_in_file' in command else ""
             infor_hash = command['infor_hash'] if 'infor_hash' in command else ""
-
-            if command.get('action') == 'introduce':
+            
+            if command.get('action') == 'login':
+                login(conn, user_name, hash_password)
+            elif command.get('action') == 'signup':
+                signup(conn, user_name, hash_password, peer_ID)
+            elif command.get('action') == 'introduce':
                 #get all file list of peer
                 list_peer_active.append({'peer_ID': peer_ID, 'peer_ip': peer_ip, 'peer_port': peer_port})
+                #cur.execute("INSERT INTO ")
             elif command.get('action') == 'publish':
                 #get add meta file to tracker
                 update_client_info(peer_ID, peer_ip,peer_port,file_name,file_size,piece_hash,piece_size,num_order_in_file)
@@ -257,7 +306,7 @@ def run_server(host, port):
 
 if __name__ == "__main__":
     hostip = get_host_default_interface_ip()
-    port = 22236
+    port = 22222
     #run_server(hostip, port)
 
     # Start server in a separate thread

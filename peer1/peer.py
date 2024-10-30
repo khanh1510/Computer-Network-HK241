@@ -9,6 +9,7 @@ import argparse
 import bencodepy
 from urllib.parse import urlparse, parse_qs
 from collections import Counter
+from datetime import datetime
 
 partner = []    #đếm số lượng piece mà một port đã gửi, mỗi phần tử là một dictionaray
 
@@ -342,12 +343,50 @@ def connect_to_server(server_host, server_port, peers_port):
     sock.sendall(json.dumps({'action': 'introduce', 'peer_ID': '19', 'peers_port':peers_port }).encode() + b'\n')
     return sock
 
+# Hàm băm mật khẩu
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def authen(sock, ip, port):
+    # Lấy thời gian hiện tại đến giây
+    current_time = datetime.now()
+
+    # Định dạng thời gian thành chuỗi theo ý muốn (năm, tháng, ngày, giờ, phút, giây)
+    id_peer = current_time.strftime("%Y%m%d%H%M%S")
+    while True:
+        temp = input("Do you want to 1.Login or 2.Signup?\n")
+        if temp == '1':   #login
+            user_name = input("User Name: ")
+            password = input("Password: ")
+            hash_pass = hash_password(password)
+            sock.sendall(json.dumps({'action': 'login', 'user_name': user_name, 'hash_password': hash_pass, 'ip': ip, 'port': port}).encode() + b'\n')
+            response = sock.recv(4096).decode()
+            if response == 'success':
+                print("Login successfully!")
+                break 
+            else:
+                print("Login fail, try again :((")
+                continue
+        elif temp == '2': #Signup
+            user_name = input("User Name: ")
+            password = input("Password: ")
+            hash_pass = hash_password(password)
+            sock.sendall(json.dumps({'action': 'signup', 'peer_ID': id_peer, 'user_name': user_name, 'hash_password': hash_pass, 'ip': ip, 'port': port}).encode() + b'\n')
+            response = sock.recv(4096).decode()
+            if response == 'success':
+                print("Signup successfully!")
+                break 
+            else:
+                print("Singup fail, try again :((")
+                continue
+
 def main(server_host, server_port, peers_port):
     host_service_thread = threading.Thread(target=start_host_service, args=(peers_port, './'))
     host_service_thread.start()
 
     # Connect to the server
     sock = connect_to_server(server_host, server_port,peers_port)
+    authen(sock, server_host, peers_port)
 
     try:
         while True:
@@ -440,12 +479,24 @@ def main(server_host, server_port, peers_port):
             sock.close()
             host_service_thread.join()
 
+#Code của thầy để lấy địa chỉ IP của máy :)))
+def get_host_default_interface_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 1))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = '127.0.0.1'
+    finally:
+        s.close()
+    return ip
+
 
 if __name__ == "__main__":
     # Replace with your server's IP address and port number
-    SERVER_HOST = '10.0.4.189'
-    SERVER_PORT = 22236
-    #CLIENT_PORT = 65434
+    SERVER_HOST = get_host_default_interface_ip()
+    SERVER_PORT = 22222
+
 
     parser = argparse.ArgumentParser(
         prog='Client',
