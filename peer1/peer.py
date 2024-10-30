@@ -8,8 +8,28 @@ import math
 import argparse
 import bencodepy
 from urllib.parse import urlparse, parse_qs
+from collections import Counter
+
+partner = []    #đếm số lượng piece mà một port đã gửi, mỗi phần tử là một dictionaray
 
 stop_event = threading.Event()
+
+
+#Hàm tăng giá trị count của port sau khi nhận được piece
+def increase_get(port):
+    for item in partner:
+        if port in item:
+            item[port] += 1
+        else:
+            partner.append({port: 1})
+
+#Hàm đếm port nào nhận bao nhiêu pieces rồi!
+def sort_port(port):
+   # Sắp xếp danh sách dựa trên giá trị count từ lớn đến bé
+    sorted_data = sorted(partner, key=lambda x: list(x.values())[0], reverse=True) 
+
+    
+
 
 # # Function to parse a magnet URI
 def parse_magnet_uri(magnet_link):
@@ -144,6 +164,14 @@ def check_local_piece_files(file_name):
         return exist_files
     else:
         return False
+    
+def check_had_piece_file(piece_path, directory='.'):
+    print("Check local piece had already?\n")
+    files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+    if piece_path in files:
+        return True
+    else:
+        return False
 
 def handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_size):
     
@@ -156,7 +184,8 @@ def handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_siz
         index = pieces.index(f"{file_name}_piece{i}")
         piece_hash.append(pieces_hash[index])
         print (f"Number {i} : {pieces_hash[index]}")
-    publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_size,num_order_in_file)
+
+    publish_piece_file(sock,peers_port,file_name,file_size, piece_hash, piece_size,num_order_in_file)
     
 def publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_size,num_order_in_file):
     #peers_hostname = socket.gethostname()
@@ -175,7 +204,7 @@ def publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_siz
     response = sock.recv(4096).decode()
     print(response)
 
-def request_file_from_peer(peers_ip, peer_port, file_name, piece_hash, num_order_in_file):
+def request_file_from_peer(sock, peers_ip, peer_port, file_name, piece_hash, num_order_in_file, file_size, piece_size):
     peer_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         peer_sock.connect((peers_ip, int(peer_port)))
@@ -191,6 +220,9 @@ def request_file_from_peer(peers_ip, peer_port, file_name, piece_hash, num_order
 
         peer_sock.close()
         print(f"Piece of file: {file_name}_piece{num_order_in_file} has been fetched from peer.")
+        increase_get(peer_port)
+        publish_piece_file(sock, peer_port, file_name, file_size, piece_hash, piece_size, num_order_in_file)
+
     except Exception as e:
         print(f"An error occurred while connecting to peer at {peers_ip}:{peer_port} - {e}")
     finally:
@@ -232,14 +264,20 @@ def fetch_file(sock,peer_port,file_name, piece_hash_need, num_order_in_file, fil
         # Kiểm tra nếu có ít nhất một host
         if peers_info:
             for peer_info in peers_info:
-                thread = threading.Thread(target=request_file_from_peer, 
-                                          args=(peer_info['peer_ip'],
-                                                peer_info['peer_port'],
-                                                peer_info['file_name'],
-                                                peer_info['piece_hash'],
-                                                peer_info['num_order_in_file']))
-                threads.append(thread)
-                thread.start()
+                if not check_had_piece_file(peer_info['file_name'] + '_piece' + peer_info['num_order_in_file']):    #Nếu piece_file đó đã có trong thư mục hiện tại rồi
+                    thread = threading.Thread(target=request_file_from_peer, 
+                        args=(sock, peer_info['peer_ip'],
+                                peer_info['peer_port'],
+                                peer_info['file_name'],
+                                peer_info['piece_hash'],
+                                peer_info['num_order_in_file'],
+                                peer_info['file_size'],
+                                peer_info['piece_size']))
+                    
+                    threads.append(thread)
+                    thread.start()
+                
+
 
             # Chờ tất cả các luồng hoàn thành
             for thread in threads:
@@ -405,7 +443,7 @@ def main(server_host, server_port, peers_port):
 
 if __name__ == "__main__":
     # Replace with your server's IP address and port number
-    SERVER_HOST = '192.168.1.103'
+    SERVER_HOST = '10.0.4.189'
     SERVER_PORT = 22236
     #CLIENT_PORT = 65434
 

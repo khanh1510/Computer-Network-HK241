@@ -7,6 +7,7 @@ import psycopg2
 import os
 import bencodepy
 import hashlib
+from collections import Counter
 
 list_peer_active = []
 list_file_tracker_have = []
@@ -60,13 +61,21 @@ def client_call(conn, addr):
                 #get file from client
                 peer_infor = []
                 for item in list_file_tracker_have:
-                    if item['file_name'] == file_name and item['piece_hash'] in piece_hash:
+                    if item['file_name'] == file_name and item['piece_hash'] in piece_hash: #Lấy thông tin của peer có hash need
+                        #Cần sắp xếp lại list peer infor sao cho hash có ít peer có nhất xếp đầu, hash có nhiều peer xếp sau
                         if item['file_size'] == 0:
                             item['file_size'] = file_size
                         peer_infor.append(item)
+
+                # Đếm số lượng mỗi chuỗi hash xuất hiện trong list
+                hash_count = Counter(i["piece_hash"] for i in peer_infor)
+
+                # Sắp xếp list theo số lượng xuất hiện của hash (từ nhỏ đến lớn), sau đó theo hash
+                sorted_peer_infor = sorted(peer_infor, key=lambda x: (hash_count[x["piece_hash"]], x["piece_hash"]))
+                
                 if peer_infor:
                     print(conn)                      
-                    conn.sendall(json.dumps({'peers_info': peer_infor}).encode())
+                    conn.sendall(json.dumps({'peers_info': sorted_peer_infor}).encode())
                     print("send all")
                 else:
                     conn.sendall(json.dumps({'error': 'File not available'}).encode())
@@ -163,6 +172,7 @@ def check_local_torrent():
 def split_string(input_string, chunk_size=40):
     return [input_string[i:i + chunk_size] for i in range(0, len(input_string), chunk_size)]
 
+#Hàm lấy danh sách các pieces hash từ magnet link
 def check(infor_hash):
     lst = check_local_torrent()
     for i in lst:
@@ -177,6 +187,8 @@ def check(infor_hash):
     return False
     
 
+#Hàm Rarest pieces first
+# def rarest_first(hash_lst):
 
 
 

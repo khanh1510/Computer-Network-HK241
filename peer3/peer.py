@@ -8,8 +8,28 @@ import math
 import argparse
 import bencodepy
 from urllib.parse import urlparse, parse_qs
+from collections import Counter
+
+partner = []    #đếm số lượng piece mà một port đã gửi, mỗi phần tử là một dictionaray
 
 stop_event = threading.Event()
+
+
+#Hàm tăng giá trị count của port sau khi nhận được piece
+def increase_get(port):
+    for item in partner:
+        if port in item:
+            item[port] += 1
+        else:
+            partner.append({port: 1})
+
+#Hàm đếm port nào nhận bao nhiêu pieces rồi!
+def sort_port(port):
+   # Sắp xếp danh sách dựa trên giá trị count từ lớn đến bé
+    sorted_data = sorted(partner, key=lambda x: list(x.values())[0], reverse=True) 
+
+    
+
 
 # # Function to parse a magnet URI
 def parse_magnet_uri(magnet_link):
@@ -75,7 +95,7 @@ def torrent_to_pieces_need(torrent_path):
     print("Test 1: ", pieces, "\n")
     print("Test 2: ", pieces_lst, "\n")
 
-    return (file_name, pieces_lst)
+    return (file_name, pieces_lst, file_size)
     #trong đó lưu ý pieces chính là 1 list 
     
 
@@ -132,6 +152,7 @@ def check_local_files(file_name):
         return True
     
 def check_local_piece_files(file_name):
+    print("Check local pieces\n")
     exist_files = []
     directory = os.getcwd()  # Lấy đường dẫn thư mục hiện tại
 
@@ -143,8 +164,17 @@ def check_local_piece_files(file_name):
         return exist_files
     else:
         return False
+    
+def check_had_piece_file(piece_path, directory='.'):
+    print("Check local piece had already?\n")
+    files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+    if piece_path in files:
+        return True
+    else:
+        return False
 
 def handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_size):
+    
     pieces_hash = create_pieces_string(pieces)
     user_input_num_piece = input( f"File {file_name} have {pieces}\n piece: {pieces_hash}. \nPlease select num piece in file to publish:" )
     num_order_in_file = shlex.split(user_input_num_piece) 
@@ -154,8 +184,9 @@ def handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_siz
         index = pieces.index(f"{file_name}_piece{i}")
         piece_hash.append(pieces_hash[index])
         print (f"Number {i} : {pieces_hash[index]}")
-    publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_size,num_order_in_file)
 
+    publish_piece_file(sock,peers_port,file_name,file_size, piece_hash, piece_size, num_order_in_file)
+    
 def publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_size,num_order_in_file):
     #peers_hostname = socket.gethostname()
     command = {
@@ -173,7 +204,7 @@ def publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_siz
     response = sock.recv(4096).decode()
     print(response)
 
-def request_file_from_peer(peers_ip, peer_port, file_name, piece_hash, num_order_in_file):
+def request_file_from_peer(sock, peers_ip, peer_port, file_name, piece_hash, num_order_in_file, file_size, piece_size):
     peer_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         peer_sock.connect((peers_ip, int(peer_port)))
@@ -189,12 +220,19 @@ def request_file_from_peer(peers_ip, peer_port, file_name, piece_hash, num_order
 
         peer_sock.close()
         print(f"Piece of file: {file_name}_piece{num_order_in_file} has been fetched from peer.")
+        print(piece_hash, "This is piece hash test")
+        increase_get(peer_port)
+
+        temp_hash = [piece_hash]
+        temp_num = [num_order_in_file]
+        publish_piece_file(sock, peer_port, file_name, file_size, temp_hash, piece_size, temp_num)
+
     except Exception as e:
         print(f"An error occurred while connecting to peer at {peers_ip}:{peer_port} - {e}")
     finally:
         peer_sock.close()
 
-def fetch_file(sock,peer_port,file_name, piece_hash_need, num_order_in_file):
+def fetch_file(sock,peer_port,file_name, piece_hash_need, num_order_in_file, file_size):
     #peers_hostname = socket.gethostname()
     command = {
         "action": "fetch",
@@ -203,6 +241,7 @@ def fetch_file(sock,peer_port,file_name, piece_hash_need, num_order_in_file):
         "file_name":file_name,
         "piece_hash":piece_hash_need,
         "num_order_in_file":num_order_in_file,
+        "file_size": file_size
     } 
     # command = {"action": "fetch", "fname": fname}
     sock.sendall(json.dumps(command).encode() + b'\n')
@@ -229,39 +268,25 @@ def fetch_file(sock,peer_port,file_name, piece_hash_need, num_order_in_file):
         # Kiểm tra nếu có ít nhất một host
         if peers_info:
             for peer_info in peers_info:
-                thread = threading.Thread(target=request_file_from_peer, 
-                                          args=(peer_info['peer_ip'],
-                                                peer_info['peer_port'],
-                                                peer_info['file_name'],
-                                                peer_info['piece_hash'],
-                                                peer_info['num_order_in_file']))
-            threads.append(thread)
-            thread.start()
+                if not check_had_piece_file(peer_info['file_name'] + '_piece' + peer_info['num_order_in_file']):    #Nếu piece_file đó đã có trong thư mục hiện tại rồi
+                    thread = threading.Thread(target=request_file_from_peer, 
+                        args=(sock, peer_info['peer_ip'],
+                                peer_info['peer_port'],
+                                peer_info['file_name'],
+                                peer_info['piece_hash'],
+                                peer_info['num_order_in_file'],
+                                peer_info['file_size'],
+                                peer_info['piece_size']))
+                    
+                    threads.append(thread)
+                    thread.start()
+                
+
 
             # Chờ tất cả các luồng hoàn thành
             for thread in threads:
                 thread.join()
 
-            #chosen_info = input("Enter the piece numbers of the hosts to download from (e.g., '1 2'): ")
-            #chosen_pieces = shlex.split(chosen_info) 
-
-            # Lấy các phần mà người dùng yêu cầu
-            # for piece_number in chosen_pieces:
-            #     # Tìm peer chứa phần tương ứng
-            #     peer_index = next((index for index, peer_info in enumerate(peers_info)
-            #                        if peer_info['num_order_in_file'] == piece_number), None)
-                
-            #     if peer_index is not None:
-            #         peer_info = peers_info[peer_index]
-            #         request_file_from_peer(
-            #             peer_info['peer_ip'],
-            #             peer_info['peer_port'],
-            #             peer_info['file_name'],
-            #             peer_info['piece_hash'],
-            #             peer_info['num_order_in_file']
-            #         )
-            #     else:
-            #         print(f"Invalid piece number entered: {piece_number}")
             
             # Kiểm tra xem tất cả các phần của tệp đã được tải xuống chưa
             all_pieces = check_local_piece_files(file_name)
@@ -339,13 +364,20 @@ def main(server_host, server_port, peers_port):
                     file_size = os.path.getsize(file_name)
                     pieces = split_file_into_pieces(file_name,piece_size)
                     handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_size)
-                elif (pieces := check_local_piece_files(file_name)):
+                elif check_local_piece_files(file_name):
+                    pieces = check_local_piece_files(file_name)
+                    piece_size = 524288
+                    file_size = 0
                     handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_size)
                 else:
                     print(f"Local file {file_name}/piece does not exist.")
             elif len(command_parts) == 2 and command_parts[0].lower() == 'fetch' and 'torrent' in command_parts[1]:
                 #fetch file with torrent file
-                file_name, pieces_hash_need = torrent_to_pieces_need(command_parts[1])
+                file_name, pieces_hash_need, file_size = torrent_to_pieces_need(command_parts[1])
+
+                if check_local_files(file_name):
+                    print("You already have file!!")
+                    continue
 
                 print("Test: ", file_name, " ", pieces_hash_need, "\n")
 
@@ -357,9 +389,39 @@ def main(server_host, server_port, peers_port):
                     if i in pieces_hash_need:
                         pieces_hash_need.remove(i)
 
-                fetch_file(sock,peers_port,file_name, pieces_hash_need, num_order_in_file)
+                fetch_file(sock,peers_port,file_name, pieces_hash_need, num_order_in_file, file_size)
             elif len(command_parts) == 2 and command_parts[0].lower() == 'fetch' and 'magnet' in command_parts[1]:
-                print("Hmmm")
+                #fetch file with magnet link :)))
+                info_hash, display_name, tracker_url = parse_magnet_uri(command_parts[1])
+
+                command = {
+                    "action": "magnet",
+                    "infor_hash": info_hash
+                } 
+                # command = {"action": "fetch", "fname": fname}
+                sock.sendall(json.dumps(command).encode() + b'\n')
+                response = json.loads(sock.recv(4096).decode())
+
+                if 'hash_pice_lst' in response:
+                    pieces_hash_need = response['hash_pice_lst']
+                    file_name = response['file_name']
+                
+                if check_local_files(file_name):
+                    print("You already have file!!")
+                    continue
+
+                print("Test: ", file_name, " ", pieces_hash_need, "\n")
+
+                pieces = check_local_piece_files(file_name)
+                pieces_hash_had = [] if not pieces else create_pieces_string(pieces)
+                num_order_in_file= [] if not pieces else [item.split("_")[-1][5:] for item in pieces]
+
+                for i in pieces_hash_had:
+                    if i in pieces_hash_need:
+                        pieces_hash_need.remove(i)
+
+                fetch_file(sock,peers_port,file_name, pieces_hash_need, num_order_in_file, file_size)
+
             elif len(command_parts) == 2 and command_parts[0].lower() == 'make':
                 _, file_name = command_parts
                 split_file_into_pieces(file_name, 524288)
@@ -385,7 +447,7 @@ def main(server_host, server_port, peers_port):
 
 if __name__ == "__main__":
     # Replace with your server's IP address and port number
-    SERVER_HOST = '192.168.1.103'
+    SERVER_HOST = '10.0.4.189'
     SERVER_PORT = 22236
     #CLIENT_PORT = 65434
 
