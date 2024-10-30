@@ -4,6 +4,9 @@ import logging
 import json
 import sys
 import psycopg2
+import os
+import bencodepy
+import hashlib
 
 list_peer_active = []
 list_file_tracker_have = []
@@ -31,9 +34,10 @@ def client_call(conn, addr):
         while True:
             data = conn.recv(1024).decode()
             if not data:
-                break 
+                continue 
 
             command = json.loads(data)
+            print("Test X: ", command, "\n")
 
             peer_ip = addr[0]
             peer_port = addr[1]
@@ -43,6 +47,7 @@ def client_call(conn, addr):
             piece_hash = command['piece_hash'] if 'piece_hash' in command else ""
             piece_size = command['piece_size'] if 'piece_size' in command else ""
             num_order_in_file = command['num_order_in_file'] if 'num_order_in_file' in command else ""
+            infor_hash = command['infor_hash'] if 'infor_hash' in command else ""
 
             if command.get('action') == 'introduce':
                 #get all file list of peer
@@ -56,6 +61,8 @@ def client_call(conn, addr):
                 peer_infor = []
                 for item in list_file_tracker_have:
                     if item['file_name'] == file_name and item['piece_hash'] in piece_hash:
+                        if item['file_size'] == 0:
+                            item['file_size'] = file_size
                         peer_infor.append(item)
                 if peer_infor:
                     print(conn)                      
@@ -63,13 +70,24 @@ def client_call(conn, addr):
                     print("send all")
                 else:
                     conn.sendall(json.dumps({'error': 'File not available'}).encode())
+            elif command.get('action') == 'magnet':
+                #Đầu tiên lấy thông tin infor_hash của command đem so sanh với tất 
+                #cả infor_hash của torren_tracker_local cái nào đúng thì lấy hash_string
+                #của torrent đó gửi về lại peer
+                if check(infor_hash):
+                    pieces_lst, file_name = check(infor_hash)
+                    conn.sendall(json.dumps({'file_name': file_name, 'hash_pice_lst': pieces_lst}).encode())
+                else:
+                    conn.sendall(json.dumps({'Error': 'No file in the server'}).encode())
+
+
             else:
                 print("Not yet....")
     except Exception as e:
         logging.exception(f"An error occurred while handling client {addr}: {e}")
+
     finally:
-        if peer_ID:
-            del list_peer_active[addr] 
+
         conn.close()
         log_event(f"Connection with {addr} has been closed.")
 
@@ -127,8 +145,37 @@ def discover_files(ip, port):
     files = request_file_list_from_client(ip, port)
     print(f"Files on {ip} {port}: {files}")
 
+def check_local_torrent():
+    print("Check local pieces\n")
+    exist_files = []
+    directory = os.getcwd()  # Lấy đường dẫn thư mục hiện tại
 
+    for filename in os.listdir(directory):
+        if filename.endswith('.torrent'):
+            exist_files.append(filename)
 
+    if len(exist_files) > 0:
+        return exist_files
+    else:
+        return False
+    
+#Cắt chuỗi dài thành các đoạn có độ dài là 40
+def split_string(input_string, chunk_size=40):
+    return [input_string[i:i + chunk_size] for i in range(0, len(input_string), chunk_size)]
+
+def check(infor_hash):
+    lst = check_local_torrent()
+    for i in lst:
+        with open(i, 'rb') as file:
+            torrent_data = bencodepy.decode(file.read())
+            info = torrent_data.get(b'info', {})
+            if hashlib.sha1(bencodepy.encode(info)).hexdigest() == infor_hash:
+                pieces = info.get(b'hash_string', b'').decode('utf-8') if b'hash_string' in info else None  # Danh sách các hash của từng phần
+                pieces_lst = split_string(pieces)
+                file_name = info.get(b'name', b'').decode('utf-8') if b'name' in info else None
+                return pieces_lst, file_name
+    return False
+    
 
 
 
@@ -151,6 +198,10 @@ def command_server():
                     get_peer_active()
                 elif action.lower() == "file":
                     get_peer_file() #get list file that peer have with cmd[1] = peer_ID
+                elif action.lower() == "meta":
+                    local_torrent = check_local_torrent()
+                    print(local_torrent)
+
             else:
                 print("Request wrong, please type again!")
         except:
