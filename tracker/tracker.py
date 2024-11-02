@@ -9,8 +9,8 @@ import bencodepy
 import hashlib
 from collections import Counter
 
-list_peer_active = []
-list_file_tracker_have = []
+# list_peer_active = []
+# list_file_tracker_have = []
 # Establish a connection to the PostgreSQL database
 def connect_db():
     return psycopg2.connect(dbname="postgres", user="postgres", password="1903", host="localhost", port="5432")
@@ -23,14 +23,27 @@ def log_event(message):
 
 def update_client_info(peer_ID, peer_ip,peer_port,file_name,file_size,piece_hash,piece_size,num_order_in_file):
     # Update the client's file list in the database
+    conn = connect_db()
+    cursor = conn.cursor()
     for i in range(len(num_order_in_file)):
-        list_file_tracker_have.append({'peer_ID': peer_ID, 'peer_ip': peer_ip,
-                                                'peer_port': peer_port, 'file_name': file_name, 'file_size': file_size,
-                                                 'piece_hash': piece_hash[i], 'piece_size': piece_size, 'num_order_in_file': num_order_in_file[i]})
+        # Kiểm tra trước khi chèn
+        cursor.execute('SELECT 1 FROM "piece" WHERE hash = %s', (piece_hash[i],))
+        if not cursor.fetchone():
+            cursor.execute(
+                'INSERT INTO "piece" (peer_port, hash, file_name, file_size, piece_size, num_order_in_file) VALUES (%s, %s, %s, %s, %s, %s)',
+                (peer_port, piece_hash[i], file_name, file_size, piece_size, num_order_in_file[i])
+            )
+            conn.commit()
+        # list_file_tracker_have.append({'peer_ID': peer_ID, 'peer_ip': peer_ip,
+        #                                         'peer_port': peer_port, 'file_name': file_name, 'file_size': file_size,
+        #                                          'piece_hash': piece_hash[i], 'piece_size': piece_size, 'num_order_in_file': num_order_in_file[i]})
+    cursor.close()
+    conn.close()
+    
 
 
 # Đăng ký người dùng mới
-def signup(sock, username, hash_password, id_x):
+def signup(sock, username, hash_password, id_x, ip, port):
     conn = connect_db()
     cursor = conn.cursor()
     
@@ -41,6 +54,11 @@ def signup(sock, username, hash_password, id_x):
         )
         conn.commit()
         sock.sendall("success".encode())
+        cursor.execute(
+            'INSERT INTO "address" (port, ip, id_peer, active) VALUES (%s, %s, %s, %s)',
+            (port, ip, id_x, False)
+        )
+        conn.commit()
     except psycopg2.IntegrityError:
         conn.rollback()
         sock.sendall("fail".encode())
@@ -49,26 +67,111 @@ def signup(sock, username, hash_password, id_x):
         conn.close()
 
 # Đăng nhập người dùng
-def login(sock, username, hash_password):
+def login(sock, username, hash_password, ip, port):
     conn = connect_db()
     cursor = conn.cursor()
 
-    
+    # Kiểm tra thông tin đăng nhập
     cursor.execute(
         'SELECT * FROM "user" WHERE username = %s AND password = %s',
         (username, hash_password)
     )
     user = cursor.fetchone()
-    
-    cursor.close()
-    conn.close()
-    
+
     if user:
-        sock.sendall("success".encode())
-        return True
+        # Lấy giá trị của id với username được người dùng nhập vào
+        cursor.execute('SELECT id FROM "user" WHERE username = %s', (username,))
+        id_peer = cursor.fetchone()
+
+        # Kiểm tra nếu id_peer có tồn tại
+        if id_peer:
+            id_peer = id_peer[0]  # Lấy giá trị id từ tuple
+
+            # Cập nhật lại giá trị ip và port khi người dùng đăng nhập
+            cursor.execute(
+                'UPDATE address SET ip = %s, port = %s, active = %s WHERE id_peer = %s',
+                (ip, port, True, id_peer)
+            )
+            conn.commit()  # Lưu thay đổi vào database
+
+            sock.sendall(json.dumps({'success': id_peer}).encode())
+
+        else:
+            sock.sendall("fail".encode())
     else:
         sock.sendall("fail".encode())
-        return False
+
+    cursor.close()
+    conn.close()
+
+#Cần viết hàm exit for peer
+def exit_peer(id_peer):
+    conn = connect_db()
+    cursor = conn.cursor()
+    # Cập nhật lại giá trị active khi user logout
+    cursor.execute(
+        'UPDATE address SET active = %s WHERE id_peer = %s',
+        (True, id_peer)
+    )
+    conn.commit()  # Lưu thay đổi vào database
+    cursor.close()
+    conn.close()
+
+
+#Cần viết hàm đầu vào là file_name, danh sách hash_piece cần để tải xuống đầu ra là danh sách thông tin về hash_pieces đó sao cho peer đó active
+def get_infor_pices(file_name, hash_pieces, boolea):
+
+    conn = connect_db()
+    cursor = conn.cursor()
+    # Cập nhật lại giá trị active khi user logout
+    # Câu truy vấn SQL
+    query = """
+            SELECT 
+                address.id_peer, address.port, address.ip, 
+                piece.file_name, piece.file_size, 
+                piece.hash, piece.piece_size, 
+                piece.num_order_in_file
+            FROM 
+                address
+            JOIN 
+                piece ON address.port = piece.peer_port
+            WHERE 
+                piece.file_name = %s
+                AND address.active = %s
+                AND piece.hash = ANY(%s);
+            """
+    # Thực thi câu truy vấn
+    cursor.execute(query, (file_name, boolea, hash_pieces))
+    result = cursor.fetchall()
+
+    # Đưa các kết quả vào danh sách
+    # args=(sock, peer_info['peer_ip'],
+    #                             peer_info['peer_port'],
+    #                             peer_info['file_name'],
+    #                             peer_info['piece_hash'],
+    #                             peer_info['num_order_in_file'],
+    #                             peer_info['file_size'],
+    #                             peer_info['piece_size']))
+    address_list = []
+    for address in result:
+        address_list.append({
+            'peer_ID': address[0],
+            'peer_port': address[1],
+            'peer_ip': address[2],
+            'file_name': address[3],
+            'file_size': address[4],
+            'piece_hash': address[5],
+            'piece_size': address[6],
+            'num_order_in_file': address[7]
+        })
+
+    cursor.close()
+    conn.close()
+
+    return address_list 
+
+
+
 
 #code nay chi de test
 def client_call(conn, addr):
@@ -95,26 +198,34 @@ def client_call(conn, addr):
             infor_hash = command['infor_hash'] if 'infor_hash' in command else ""
             
             if command.get('action') == 'login':
-                login(conn, user_name, hash_password)
+                login(conn, user_name, hash_password, peer_ip, peer_port)
             elif command.get('action') == 'signup':
-                signup(conn, user_name, hash_password, peer_ID)
-            elif command.get('action') == 'introduce':
-                #get all file list of peer
-                list_peer_active.append({'peer_ID': peer_ID, 'peer_ip': peer_ip, 'peer_port': peer_port})
+                signup(conn, user_name, hash_password, peer_ID, peer_ip, peer_port)
+            # elif command.get('action') == 'introduce':
+            #     #get all file list of peer
+            #     list_peer_active.append({'peer_ID': peer_ID, 'peer_ip': peer_ip, 'peer_port': peer_port})
                 #cur.execute("INSERT INTO ")
             elif command.get('action') == 'publish':
                 #get add meta file to tracker
                 update_client_info(peer_ID, peer_ip,peer_port,file_name,file_size,piece_hash,piece_size,num_order_in_file)
                 conn.sendall("File list updated!".encode())
             elif command.get('action') == 'fetch':
+                # command = {
+                #     "action": "fetch",
+                #     "peer_port": peer_port,
+                #     "peers_ID": id_peer_main,
+                #     "file_name":file_name,
+                #     "piece_hash":piece_hash_need,
+                #     "num_order_in_file":num_order_in_file,
+                #     "file_size": file_size
+                # } 
                 #get file from client
-                peer_infor = []
-                for item in list_file_tracker_have:
-                    if item['file_name'] == file_name and item['piece_hash'] in piece_hash: #Lấy thông tin của peer có hash need
-                        #Cần sắp xếp lại list peer infor sao cho hash có ít peer có nhất xếp đầu, hash có nhiều peer xếp sau
-                        if item['file_size'] == 0:
-                            item['file_size'] = file_size
-                        peer_infor.append(item)
+                peer_infor = get_infor_pices(file_name, piece_hash, True)
+                
+                # peer_infor = []
+                for item in peer_infor:
+                    if item['file_size'] == 0:
+                        item['file_size'] = file_size
 
                 # Đếm số lượng mỗi chuỗi hash xuất hiện trong list
                 hash_count = Counter(i["piece_hash"] for i in peer_infor)
@@ -137,7 +248,8 @@ def client_call(conn, addr):
                     conn.sendall(json.dumps({'file_name': file_name, 'hash_pice_lst': pieces_lst}).encode())
                 else:
                     conn.sendall(json.dumps({'Error': 'No file in the server'}).encode())
-
+            elif command.get('action') == 'peer_exit':
+                exit_peer(peer_ID)
 
             else:
                 print("Not yet....")
@@ -172,15 +284,57 @@ def client_call(conn, addr):
 
 #In ra danh sach list peer dang hoat dong
 def get_peer_active():
-    print("This is the peer list \n")
-    for peer in list_peer_active:
-        print(peer, "\n")
+    conn = connect_db()
+    cursor = conn.cursor()
+    # Truy vấn để lấy thông tin các địa chỉ có active = true
+    cursor.execute('SELECT id_peer, ip, port, active FROM "address" WHERE active = true')
+
+    # Lấy tất cả các hàng kết quả
+    addresses = cursor.fetchall()
+
+    # Đưa các kết quả vào danh sách
+    address_list = []
+    for address in addresses:
+        address_list.append({
+            'ID_peer': address[0],
+            'IP': address[1],
+            'PORT': address[2],
+            'Active': address[3]
+        })
+    cursor.close()
+    conn.close()
+
+    return address_list
 
 #In ra danh sach file ma tracker nam giu
 def get_peer_file():
-    print("This is the file list \n")
-    for file in list_file_tracker_have:
-        print(file, "\n")
+    # print("This is the file list \n")
+    # for file in list_file_tracker_have:
+    #     print(file, "\n")
+
+    conn = connect_db()
+    cursor = conn.cursor()
+    # Truy vấn để lấy thông tin các địa chỉ có active = true
+    cursor.execute('SELECT id_peer, ip, port, active FROM "address" WHERE active = true')
+
+    # Lấy tất cả các hàng kết quả
+    addresses = cursor.fetchall()
+
+    # Đưa các kết quả vào danh sách
+    address_list = []
+    for address in addresses:
+        address_list.append({
+            'ID_peer': address[0],
+            'IP': address[1],
+            'PORT': address[2],
+            'Active': address[3]
+        })
+    cursor.close()
+    conn.close()
+
+    return address_list
+
+
 
 def request_file_list_from_client(ip, port):
     try: 
@@ -256,12 +410,17 @@ def command_server():
             if cmd:
                 action = cmd[0]
                 if action.lower() == "peer":
-                    get_peer_active()
+                    temp = get_peer_active()
+                    for i in temp:
+                        print(i, "\n")
                 elif action.lower() == "file":
-                    get_peer_file() #get list file that peer have with cmd[1] = peer_ID
+                    #get_peer_file() #get list file that peer have with cmd[1] = peer_ID
+                    print(get_peer_file())
                 elif action.lower() == "meta":
                     local_torrent = check_local_torrent()
                     print(local_torrent)
+                elif action.lower() == "exit":
+                    break
 
             else:
                 print("Request wrong, please type again!")

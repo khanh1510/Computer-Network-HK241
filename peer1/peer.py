@@ -12,6 +12,7 @@ from collections import Counter
 from datetime import datetime
 
 partner = []    #đếm số lượng piece mà một port đã gửi, mỗi phần tử là một dictionaray
+id_peer_main = ""
 
 stop_event = threading.Event()
 
@@ -180,7 +181,7 @@ def handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_siz
     user_input_num_piece = input( f"File {file_name} have {pieces}\n piece: {pieces_hash}. \nPlease select num piece in file to publish:" )
     num_order_in_file = shlex.split(user_input_num_piece) 
     piece_hash=[]
-    print("You was selected: " )
+    print("You was selected: " ) 
     for i in num_order_in_file:
         index = pieces.index(f"{file_name}_piece{i}")
         piece_hash.append(pieces_hash[index])
@@ -193,7 +194,7 @@ def publish_piece_file(sock,peers_port,file_name,file_size, piece_hash,piece_siz
     command = {
         "action": "publish",
         "peers_port": peers_port,
-        "peer_ID": 19,
+        "peer_ID": id_peer_main,
         "file_name":file_name,
         "file_size":file_size,
         "piece_hash":piece_hash,
@@ -234,7 +235,7 @@ def fetch_file(sock,peer_port,file_name, piece_hash_need, num_order_in_file, fil
     command = {
         "action": "fetch",
         "peer_port": peer_port,
-        "peers_ID": 19,
+        "peers_ID": id_peer_main,
         "file_name":file_name,
         "piece_hash":piece_hash_need,
         "num_order_in_file":num_order_in_file,
@@ -340,7 +341,7 @@ def connect_to_server(server_host, server_port, peers_port):
     sock.bind((server_host, peers_port))
     sock.connect((server_host, server_port))
 
-    sock.sendall(json.dumps({'action': 'introduce', 'peer_ID': '19', 'peers_port':peers_port }).encode() + b'\n')
+    #sock.sendall(json.dumps({'action': 'introduce', 'peer_ID': id_peer_main, 'peers_port':peers_port }).encode() + b'\n')
     return sock
 
 # Hàm băm mật khẩu
@@ -354,31 +355,39 @@ def authen(sock, ip, port):
     # Định dạng thời gian thành chuỗi theo ý muốn (năm, tháng, ngày, giờ, phút, giây)
     id_peer = current_time.strftime("%Y%m%d%H%M%S")
     while True:
-        temp = input("Do you want to 1.Login or 2.Signup?\n")
-        if temp == '1':   #login
-            user_name = input("User Name: ")
-            password = input("Password: ")
-            hash_pass = hash_password(password)
-            sock.sendall(json.dumps({'action': 'login', 'user_name': user_name, 'hash_password': hash_pass, 'ip': ip, 'port': port}).encode() + b'\n')
-            response = sock.recv(4096).decode()
-            if response == 'success':
-                print("Login successfully!")
-                break 
-            else:
-                print("Login fail, try again :((")
-                continue
-        elif temp == '2': #Signup
-            user_name = input("User Name: ")
-            password = input("Password: ")
-            hash_pass = hash_password(password)
-            sock.sendall(json.dumps({'action': 'signup', 'peer_ID': id_peer, 'user_name': user_name, 'hash_password': hash_pass, 'ip': ip, 'port': port}).encode() + b'\n')
-            response = sock.recv(4096).decode()
-            if response == 'success':
-                print("Signup successfully!")
-                break 
-            else:
-                print("Singup fail, try again :((")
-                continue
+        
+        try:
+            temp = input("Do you want to 1.Login or 2.Signup?\n")
+            if temp == '1':   #login
+                user_name = input("User Name: ")
+                password = input("Password: ")
+                hash_pass = hash_password(password)
+                sock.sendall(json.dumps({'action': 'login', 'user_name': user_name, 'hash_password': hash_pass, 'ip': ip, 'port': port}).encode() + b'\n')
+                response = sock.recv(4096).decode()
+                # Chuyển chuỗi JSON thành đối tượng từ điển
+                response_data = json.loads(response)
+                if response_data['success']:
+                    id_peer = response_data['success']
+                    print(id_peer, "\n")
+                    print("Login successfully!")
+                    break 
+                else:
+                    print("Login fail, try again :((")
+                    continue
+            elif temp == '2': #Signup
+                user_name = input("User Name: ")
+                password = input("Password: ")
+                hash_pass = hash_password(password)
+                sock.sendall(json.dumps({'action': 'signup', 'peer_ID': id_peer, 'user_name': user_name, 'hash_password': hash_pass, 'ip': ip, 'port': port}).encode() + b'\n')
+                response = sock.recv(4096).decode()
+                if response == 'success':
+                    print("Signup successfully!")
+                    continue
+                else:
+                    print("Singup fail, try again :((")
+                    continue
+        except:
+            print("Something went wrong!, again")
 
 def main(server_host, server_port, peers_port):
     host_service_thread = threading.Thread(target=start_host_service, args=(peers_port, './'))
@@ -469,6 +478,12 @@ def main(server_host, server_port, peers_port):
                 create_torrent_file(server_host, file_name, file_size, hmm, 524288, out_file)
 
             elif user_input.lower() == 'exit':
+                command = {
+                    "action": "peer_exit",
+                    "peer_ID": id_peer_main
+                } 
+                # command = {"action": "fetch", "fname": fname}
+                sock.sendall(json.dumps(command).encode() + b'\n')
                 stop_event.set()  # Stop the host service thread
                 sock.close()    
                 break
