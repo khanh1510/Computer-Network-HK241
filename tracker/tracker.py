@@ -111,7 +111,7 @@ def exit_peer(id_peer):
     # Cập nhật lại giá trị active khi user logout
     cursor.execute(
         'UPDATE address SET active = %s WHERE id_peer = %s',
-        (True, id_peer)
+        (False, id_peer)
     )
     conn.commit()  # Lưu thay đổi vào database
     cursor.close()
@@ -183,7 +183,7 @@ def client_call(conn, addr):
                 continue 
 
             command = json.loads(data)
-            print("Test X: ", command, "\n")
+            #print("Test X: ", command, "\n")
 
             peer_ip = addr[0]
             peer_port = addr[1]
@@ -236,7 +236,7 @@ def client_call(conn, addr):
                 if peer_infor:
                     print(conn)                      
                     conn.sendall(json.dumps({'peers_info': sorted_peer_infor}).encode())
-                    print("send all")
+                    print("Sent all")
                 else:
                     conn.sendall(json.dumps({'error': 'File not available'}).encode())
             elif command.get('action') == 'magnet':
@@ -249,8 +249,8 @@ def client_call(conn, addr):
                 else:
                     conn.sendall(json.dumps({'Error': 'No file in the server'}).encode())
             elif command.get('action') == 'peer_exit':
+                print("Exit peer", peer_ID)
                 exit_peer(peer_ID)
-
             else:
                 print("Not yet....")
     except Exception as e:
@@ -262,16 +262,14 @@ def client_call(conn, addr):
         log_event(f"Connection with {addr} has been closed.")
 
 # #Hàm này để ping đến một địa chỉ IP + Port
-# def ping_IP(ip, port, conn):
-#     if ip:
-#         # peer_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-#         # peer_sock.connect((ip, port))
-#         request = {'action': 'ping'}
-#         conn.sendall(json.dumps(request).encode() + b'\n')
-#         response = conn.recv(4096).decode()
-#         return response
-#     else:
-#         print("Invalid peer to ping!!!")
+def ping_IP(ip, port, timeout=1):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(timeout)
+        try:
+            s.connect((ip, port))
+            return True
+        except (socket.timeout, socket.error):
+            return False
 
 # #Tra ve kq cua peer nao dang active
 # def get_peer_active(peers, conn):
@@ -407,6 +405,7 @@ def command_server():
         try: 
             cmd = input("Admin: ")
             cmd = cmd.split()
+            print(cmd)
             if cmd:
                 action = cmd[0]
                 if action.lower() == "peer":

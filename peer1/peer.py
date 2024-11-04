@@ -10,6 +10,8 @@ import bencodepy
 from urllib.parse import urlparse, parse_qs
 from collections import Counter
 from datetime import datetime
+import re
+import urllib.parse
 
 partner = []    #đếm số lượng piece mà một port đã gửi, mỗi phần tử là một dictionaray
 id_peer_main = ""
@@ -75,6 +77,25 @@ def create_torrent_file(tracker, filename, size, chunk_hash, chunk_size, output_
     
     print(f"Torrent file '{output_file}' created successfully!")
 
+def create_magnet_link(torrent_file_path):
+    # Đọc nội dung của tệp torrent
+    with open(torrent_file_path, "rb") as f:
+        torrent_data = f.read()
+
+    # Giải mã dữ liệu tệp torrent
+    torrent_dict = bencodepy.decode(torrent_data)
+
+    # Lấy phần "info" của tệp torrent và tạo hash SHA1 cho nó
+    info = torrent_dict[b'info']
+    info_hash = hashlib.sha1(bencodepy.encode(info)).hexdigest()
+
+    # Lấy tên tệp từ phần "info" nếu có
+    name = torrent_dict[b'info'].get(b'name', b'Unnamed').decode('utf-8')
+
+    # Tạo magnet link
+    magnet_link = f"magnet:?xt=urn:btih:{info_hash}&dn={urllib.parse.quote(name)}"
+    print(magnet_link)
+
 
 #Cắt chuỗi dài thành các đoạn có độ dài là 40
 def split_string(input_string, chunk_size=40):
@@ -94,8 +115,8 @@ def torrent_to_pieces_need(torrent_path):
     pieces = info.get(b'hash_string', b'').decode('utf-8') if b'hash_string' in info else None  # Danh sách các hash của từng phần
     pieces_lst = split_string(pieces)
 
-    print("Test 1: ", pieces, "\n")
-    print("Test 2: ", pieces_lst, "\n")
+    # print("Test 1: ", pieces, "\n")
+    # print("Test 2: ", pieces_lst, "\n")
 
     return (file_name, pieces_lst, file_size)
     #trong đó lưu ý pieces chính là 1 list 
@@ -179,7 +200,10 @@ def handle_publish_piece(sock, peers_port, pieces, file_name,file_size,piece_siz
     
     pieces_hash = create_pieces_string(pieces)
     user_input_num_piece = input( f"File {file_name} have {pieces}\n piece: {pieces_hash}. \nPlease select num piece in file to publish:" )
-    num_order_in_file = shlex.split(user_input_num_piece) 
+    if user_input_num_piece == 'all':
+        num_order_in_file = [int(re.search(r'piece(\d+)', file).group(1)) for file in pieces]
+    else:
+        num_order_in_file = shlex.split(user_input_num_piece) 
     piece_hash=[]
     print("You was selected: " ) 
     for i in num_order_in_file:
@@ -248,7 +272,7 @@ def fetch_file(sock,peer_port,file_name, piece_hash_need, num_order_in_file, fil
     if 'peers_info' in response:
 
         peers_info = response['peers_info']
-        print(response) #response chính là một list các dictionary thông tin peer nào có hash nào
+        #print(response) #response chính là một list các dictionary thông tin peer nào có hash nào
 
 
         # In thông tin về các máy ngang hàng có chứa tệp
@@ -368,7 +392,9 @@ def authen(sock, ip, port):
                 response_data = json.loads(response)
                 if response_data['success']:
                     id_peer = response_data['success']
-                    print(id_peer, "\n")
+                    global id_peer_main
+                    id_peer_main = id_peer
+                    print("ID of peer is: ", id_peer_main, "\n")
                     print("Login successfully!")
                     break 
                 else:
@@ -399,7 +425,7 @@ def main(server_host, server_port, peers_port):
 
     try:
         while True:
-            user_input = input("Enter command (publish file_name --- fetch torrent_path/magnet_link --- exit): ")
+            user_input = input("Enter command (- publish file_name \nfetch torrent_path/magnet_link \n make_torrent file \n make_magnet file \nexit): ")
             command_parts = shlex.split(user_input)
             if len(command_parts) == 2 and command_parts[0].lower() == 'publish':
                 _,file_name = command_parts
@@ -423,7 +449,7 @@ def main(server_host, server_port, peers_port):
                     print("You already have file!!")
                     continue
 
-                print("Test: ", file_name, " ", pieces_hash_need, "\n")
+                #print("Test: ", file_name, " ", pieces_hash_need, "\n")
 
                 pieces = check_local_piece_files(file_name)
                 pieces_hash_had = [] if not pieces else create_pieces_string(pieces)
@@ -454,7 +480,7 @@ def main(server_host, server_port, peers_port):
                     print("You already have file!!")
                     continue
 
-                print("Test: ", file_name, " ", pieces_hash_need, "\n")
+                #print("Test: ", file_name, " ", pieces_hash_need, "\n")
 
                 pieces = check_local_piece_files(file_name)
                 pieces_hash_had = [] if not pieces else create_pieces_string(pieces)
@@ -466,17 +492,20 @@ def main(server_host, server_port, peers_port):
 
                 fetch_file(sock,peers_port,file_name, pieces_hash_need, num_order_in_file, file_size)
 
-            elif len(command_parts) == 2 and command_parts[0].lower() == 'make':
+            elif len(command_parts) == 2 and command_parts[0].lower() == 'make_torrent':
                 _, file_name = command_parts
                 split_file_into_pieces(file_name, 524288)
                 hmm = create_pieces_string(check_local_piece_files(file_name))
                 file_size = os.path.getsize(file_name)
                 out_file = file_name + '.torrent'
 
-                print("Test 3: ", hmm, "\n")
+                #print("Test 3: ", hmm, "\n")
                 
                 create_torrent_file(server_host, file_name, file_size, hmm, 524288, out_file)
-
+            elif len(command_parts) == 2 and command_parts[0].lower() == 'make_magnet':
+                _, file_torrent = command_parts
+                create_magnet_link(file_torrent)
+                
             elif user_input.lower() == 'exit':
                 command = {
                     "action": "peer_exit",
@@ -484,6 +513,7 @@ def main(server_host, server_port, peers_port):
                 } 
                 # command = {"action": "fetch", "fname": fname}
                 sock.sendall(json.dumps(command).encode() + b'\n')
+                print("Exit", id_peer_main)
                 stop_event.set()  # Stop the host service thread
                 sock.close()    
                 break
@@ -511,6 +541,8 @@ if __name__ == "__main__":
     # Replace with your server's IP address and port number
     SERVER_HOST = get_host_default_interface_ip()
     SERVER_PORT = 22222
+
+    
 
 
     parser = argparse.ArgumentParser(
